@@ -3,11 +3,18 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:geocoding/geocoding.dart';
+import 'package:machiscore/data/current_location_finder.dart';
+import 'package:machiscore/data/home_town_store.dart';
 import 'package:machiscore/data/machiscore_repository.dart';
 import 'package:machiscore/main.dart';
 import 'package:machiscore/screens/compare_screen.dart';
+import 'package:machiscore/screens/ranking_screen.dart';
 import 'package:machiscore/screens/result_screen.dart';
+import 'package:machiscore/widgets/score_radar_chart.dart';
+import 'package:machiscore/widgets/share_card.dart';
 import 'package:machiscore/theme/app_theme.dart';
+import 'package:machiscore/utils/town_summary.dart';
 
 /// テスト用のリポジトリ。
 /// 本番は compute() で別isolateに逃がすが、flutter_test ではそのisolateが
@@ -20,10 +27,17 @@ MachiscoreRepository newTestRepository() =>
 /// rootBundle の読み込みは testWidgets の疑似非同期環境では解決しないため、
 /// runAsync で実I/Oを先に済ませてから注入する。これをやらないと
 /// ローディング表示のまま pumpAndSettle がタイムアウトする。
-Future<void> pumpLoadedApp(WidgetTester tester) async {
+Future<void> pumpLoadedApp(WidgetTester tester, {HomeTownStore? homeTownStore}) async {
   final repository = newTestRepository();
   await tester.runAsync(repository.load);
-  await tester.pumpWidget(MachiscoreApp(repository: repository));
+  await tester.pumpWidget(
+    MachiscoreApp(
+      repository: repository,
+      // 既定でもメモリ実装にする。本物は SharedPreferences のプラグインを叩き、
+      // flutter_test では解決せずロード中のまま止まってしまう。
+      homeTownStore: homeTownStore ?? InMemoryHomeTownStore(),
+    ),
+  );
   await tester.pump();
 }
 
@@ -65,9 +79,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(ResultScreen), findsOneWidget);
-    expect(find.textContaining('全国'), findsWidgets);
     // 分母は昼間人口。3桁区切りで表示する。
     expect(find.text('551,344人'), findsOneWidget);
+    // カテゴリのカードはレーダーチャートの下にあり初期表示の外なので送る
+    await tester.drag(find.byType(ListView), const Offset(0, -500));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('全国'), findsWidgets);
   });
 
   testWidgets('検索結果が0件のときはその旨を表示する', (tester) async {
@@ -265,7 +282,9 @@ void main() {
     await tester.tap(find.widgetWithText(ListTile, '渋谷区').first);
     await tester.pumpAndSettle();
 
-    // 渋谷区は美容室が5年で増えている
+    // 増減バッジはカテゴリカード内にあり、初期表示の外なので送る
+    await tester.drag(find.byType(ListView), const Offset(0, -500));
+    await tester.pumpAndSettle();
     expect(find.textContaining('5年前より'), findsWidgets);
     expect(find.textContaining('2016年'), findsWidgets);
   });
@@ -409,6 +428,329 @@ void main() {
         greaterThanOrEqualTo(3.0),
         reason: '$name: ロゴのバーがピンに埋もれる',
       );
+    }
+  });
+
+  test('かな・カタカナ・ローマ字のどれでも検索できる', () async {
+    final repository = await loadRepository();
+    // 表記が違っても同じ町に当たること
+    for (final query in ['渋谷区', 'しぶや', 'シブヤ', 'shibuya', 'ｼﾌﾞﾔ']) {
+      final hits = repository.search(query);
+      expect(
+        hits.any((m) => m.code == '13113'),
+        isTrue,
+        reason: '「$query」で渋谷区に当たらない',
+      );
+    }
+    // 促音・拗音を含む読みも通ること
+    expect(
+      repository.search('sapporoshichuuou').any((m) => m.code == '01101'),
+      isTrue,
+      reason: 'ローマ字で札幌市中央区に当たらない',
+    );
+    expect(
+      repository.search('はままつしてんりゅう').any((m) => m.code == '22137'),
+      isTrue,
+      reason: 'かなで浜松市天竜区に当たらない',
+    );
+  });
+
+  test('全市区町村に読み仮名がある', () async {
+    final repository = await loadRepository();
+    for (final municipality in repository.municipalities) {
+      expect(municipality.kana, isNotEmpty, reason: '${municipality.name} に読みが無い');
+      expect(municipality.romaji, isNotEmpty, reason: '${municipality.name} にローマ字が無い');
+    }
+  });
+
+  testWidgets('結果画面から比較に追加できる', (tester) async {
+    await pumpLoadedApp(tester);
+
+    await tester.enterText(find.byType(TextField), 'しぶや');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ListTile, '渋谷区').first);
+    await tester.pumpAndSettle();
+
+    // 結果画面に「くらべる」の導線がある
+    expect(find.widgetWithText(TextButton, 'くらべる'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'くらべる'));
+    await tester.pumpAndSettle();
+
+    // 検索画面に戻り、選択済みになっている
+    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+  });
+
+  test('県内順位が全国順位と矛盾しない', () async {
+    final repository = await loadRepository();
+    for (final municipality in repository.municipalities) {
+      if (!municipality.ranked) continue;
+      expect(municipality.prefectureRank, isNotNull);
+      // 県内順位は全国順位を超えない（母集団が部分集合なので）
+      for (final entry in municipality.categories.values) {
+        if (!entry.hasRank || entry.prefectureRank == null) continue;
+        expect(
+          entry.prefectureRank!,
+          lessThanOrEqualTo(entry.rank!),
+          reason: '${municipality.name}: 県内順位が全国順位より下',
+        );
+        expect(entry.prefectureRank!, lessThanOrEqualTo(entry.prefectureTotal!));
+      }
+    }
+  });
+
+  test('似ている町は自分を含まず、対象外の町も入らない', () async {
+    final repository = await loadRepository();
+    final sapporo = repository.municipalities.firstWhere((m) => m.code == '01101');
+    final similar = repository.similarTo(sapporo);
+
+    expect(similar, hasLength(5));
+    expect(similar.any((m) => m.code == sapporo.code), isFalse);
+    expect(similar.every((m) => m.ranked), isTrue);
+    // 政令市の中心区には似た性格の町が並ぶはず（総合点が極端に離れない）
+    for (final m in similar) {
+      expect((m.totalScore! - sapporo.totalScore!).abs(), lessThan(30));
+    }
+  });
+
+  testWidgets('似ている町から次の町へ進める', (tester) async {
+    await pumpLoadedApp(tester);
+
+    await tester.enterText(find.byType(TextField), '渋谷区');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ListTile, '渋谷区').first);
+    await tester.pumpAndSettle();
+
+    // 似ている町の節は画面下部にあり ListView の遅延描画で未生成なので、
+    // 先にスクロールしてから確かめる
+    await tester.scrollUntilVisible(find.text('スコアの傾向が似ている町'), 300);
+    expect(find.text('スコアの傾向が似ている町'), findsOneWidget);
+
+    // 1件目をタップすると、その町の結果画面に進む
+    final firstSimilar = find.descendant(
+      of: find.byType(Card),
+      matching: find.byType(ListTile),
+    );
+    final targetName = tester.widget<Text>(
+      find.descendant(of: firstSimilar.first, matching: find.byType(Text)).first,
+    ).data;
+    await tester.tap(firstSimilar.first);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, targetName!), findsOneWidget);
+  });
+
+  testWidgets('マイタウンを登録すると検索前の画面に出る', (tester) async {
+    final store = InMemoryHomeTownStore();
+    await pumpLoadedApp(tester, homeTownStore: store);
+
+    await tester.enterText(find.byType(TextField), '渋谷区');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ListTile, '渋谷区').first);
+    await tester.pumpAndSettle();
+
+    // 星ボタンで登録
+    await tester.tap(find.byIcon(Icons.star_border));
+    await tester.pumpAndSettle();
+    expect(await store.load(), '13113');
+
+    // 検索画面に戻って検索語を消すと、マイタウンが出ている
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pumpAndSettle();
+
+    expect(find.text('マイタウン'), findsOneWidget);
+    expect(find.text('渋谷区'), findsOneWidget);
+  });
+
+  testWidgets('結果画面にレーダーチャートが出る', (tester) async {
+    await pumpLoadedApp(tester);
+    await tester.enterText(find.byType(TextField), '渋谷区');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ListTile, '渋谷区').first);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ScoreRadarChart), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('全国ランキングを開いてカテゴリを切り替えられる', (tester) async {
+    await pumpLoadedApp(tester);
+
+    await tester.tap(find.byIcon(Icons.leaderboard_outlined));
+    await tester.pumpAndSettle();
+    expect(find.byType(RankingScreen), findsOneWidget);
+
+    // 1行目の町名を拾う。leading の順位番号ではなく title を見る。
+    String topTownName() {
+      final tile = tester.widget<ListTile>(find.byType(ListTile).first);
+      return (tile.title! as Text).data!;
+    }
+
+    final firstBefore = topTownName();
+
+    // カテゴリを切り替えると並びが変わる
+    await tester.tap(find.widgetWithText(ChoiceChip, '喫茶店'));
+    await tester.pumpAndSettle();
+    expect(topTownName(), isNot(firstBefore));
+    expect(tester.takeException(), isNull);
+  });
+
+  test('ランキングは対象外の町を含まない', () async {
+    final repository = await loadRepository();
+    final ranked = repository.municipalities.where((m) => m.ranked).toList();
+    // 対象外の33件は入らない
+    expect(ranked.length, lessThan(repository.municipalities.length));
+    expect(ranked.every((m) => m.totalScore != null), isTrue);
+  });
+
+  test('全市区町村で特徴文が作れる', () async {
+    final repository = await loadRepository();
+    final variety = <String>{};
+    for (final municipality in repository.municipalities) {
+      if (!municipality.ranked) continue;
+      final summary = describeTown(municipality, repository.categories);
+      expect(summary, isNotNull, reason: '${municipality.name} の特徴文が作れない');
+      variety.add(summary!);
+    }
+    // 全部が同じ文言になっていないこと（判定が機能している証拠）
+    expect(variety.length, greaterThan(10));
+  });
+
+  test('規模帯の順位が母数の中に収まっている', () async {
+    final repository = await loadRepository();
+    for (final municipality in repository.municipalities) {
+      if (!municipality.ranked) continue;
+      expect(municipality.sizeBand, isNotNull);
+      expect(municipality.sizeBandRank, isNotNull);
+      expect(municipality.sizeBandRank!, lessThanOrEqualTo(municipality.sizeBandTotal!));
+      // 規模帯は全国より母数が小さいので、順位も全国以下になる
+      expect(municipality.sizeBandTotal!, lessThan(repository.municipalities.length));
+    }
+  });
+
+  testWidgets('結果画面に町の特徴と規模帯順位が出る', (tester) async {
+    await pumpLoadedApp(tester);
+    await tester.enterText(find.byType(TextField), '渋谷区');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ListTile, '渋谷区').first);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('が多く、'), findsOneWidget);
+    expect(find.textContaining('の中では'), findsOneWidget);
+  });
+
+  group('現在地から市区町村を割り出す', () {
+    Placemark placemark({
+      String admin = '',
+      String locality = '',
+      String subLocality = '',
+      String subAdmin = '',
+    }) =>
+        Placemark(
+          administrativeArea: admin,
+          locality: locality,
+          subLocality: subLocality,
+          subAdministrativeArea: subAdmin,
+        );
+
+    test('政令市では市名ではなく区に当てる', () async {
+      final repository = await loadRepository();
+      // iOSは「札幌市」と「中央区」を別フィールドで返すことがある
+      final match = CurrentLocationFinder.matchMunicipality(
+        placemark(admin: '北海道', locality: '札幌市', subLocality: '中央区'),
+        repository.municipalities,
+      );
+      expect(match?.code, '01101');
+    });
+
+    test('市区町村名がそのまま返る場合', () async {
+      final repository = await loadRepository();
+      final match = CurrentLocationFinder.matchMunicipality(
+        placemark(admin: '東京都', locality: '渋谷区'),
+        repository.municipalities,
+      );
+      expect(match?.code, '13113');
+    });
+
+    test('同名の町は都道府県で正しく絞り込む', () async {
+      final repository = await loadRepository();
+      // 池田町は4県にある。administrativeArea で区別できること。
+      final gifu = CurrentLocationFinder.matchMunicipality(
+        placemark(admin: '岐阜県', locality: '池田町'),
+        repository.municipalities,
+      );
+      final hokkaido = CurrentLocationFinder.matchMunicipality(
+        placemark(admin: '北海道', locality: '池田町'),
+        repository.municipalities,
+      );
+      expect(gifu?.code, '21404');
+      expect(hokkaido?.code, '01644');
+    });
+
+    test('該当しない住所では null を返す', () async {
+      final repository = await loadRepository();
+      final match = CurrentLocationFinder.matchMunicipality(
+        placemark(admin: 'California', locality: 'San Francisco'),
+        repository.municipalities,
+      );
+      expect(match, isNull);
+    });
+  });
+
+  test('町の背景データがほぼ全件そろっている', () async {
+    final repository = await loadRepository();
+    final total = repository.municipalities.length;
+    final withProfile = repository.municipalities
+        .where((m) => m.populationChangeRate != null && m.elderlyRate != null)
+        .length;
+    // 浜松市の旧区など数件は欠けるが、99%以上は埋まっているはず
+    expect(withProfile / total, greaterThan(0.99));
+  });
+
+  testWidgets('結果画面に人口増減と高齢化率が出る', (tester) async {
+    await pumpLoadedApp(tester);
+    await tester.enterText(find.byType(TextField), '渋谷区');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ListTile, '渋谷区').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('5年間の人口増減'), findsOneWidget);
+    expect(find.text('65歳以上の割合'), findsOneWidget);
+    expect(find.text('面積'), findsOneWidget);
+  });
+
+  testWidgets('共有カードが例外なく描画できる', (tester) async {
+    // 共有画像は画面に出ないため、壊れていても気づけない。
+    // 端末のテーマや文字サイズに依存しない版であることも含めて確かめる。
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+    final shibuya = repository.municipalities.firstWhere((m) => m.code == '13113');
+
+    await tester.pumpWidget(
+      MediaQuery(
+        // 大きな文字設定でも版が崩れないこと
+        data: const MediaQueryData(textScaler: TextScaler.linear(2.0)),
+        child: MaterialApp(
+          home: Center(
+            child: ShareCard(municipality: shibuya, categories: repository.categories),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(ScoreRadarChart), findsOneWidget);
+    expect(find.text('渋谷区'), findsOneWidget);
+  });
+
+  test('出典表記がデータ側から供給される', () async {
+    // アプリに固定文言を持たせると、データを足したとき表示だけ古くなる。
+    final repository = await loadRepository();
+    expect(repository.sourceNote, isNotEmpty);
+    // 実際に使っている統計がすべて出典に含まれること
+    for (final source in ['経済センサス', '国勢調査']) {
+      expect(repository.sourceNote, contains(source));
     }
   });
 

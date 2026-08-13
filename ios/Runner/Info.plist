@@ -6,6 +6,8 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>現在地の市区町村を自動で調べてスコアを表示するために使います。位置情報が外部に送信されることはありません。</string>
 	<key>CFBundleDisplayName</key>
 	<string>マチスコア</string>
 	<key>CFBundleExecutable</key>

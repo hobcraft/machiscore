@@ -1,17 +1,31 @@
 import 'package:flutter/material.dart';
 
+import '../data/current_location_finder.dart';
+import '../data/home_town_store.dart';
 import '../data/machiscore_repository.dart';
 import '../models/municipality.dart';
 import '../theme/app_theme.dart';
 import '../widgets/machiscore_logo.dart';
 import 'compare_screen.dart';
+import 'ranking_screen.dart';
 import 'result_screen.dart';
 
 class SearchScreen extends StatefulWidget {
   /// テストから差し替えるための注入口。未指定なら既定のリポジトリを使う。
   final MachiscoreRepository? repository;
 
-  const SearchScreen({super.key, this.repository});
+  /// マイタウンの保存先。テストではメモリ実装に差し替える。
+  final HomeTownStore? homeTownStore;
+
+  /// 現在地の解決。テストでは座標と住所を差し替える。
+  final CurrentLocationFinder? locationFinder;
+
+  const SearchScreen({
+    super.key,
+    this.repository,
+    this.homeTownStore,
+    this.locationFinder,
+  });
 
   @override
   State<SearchScreen> createState() => _SearchScreenState();
@@ -19,6 +33,17 @@ class SearchScreen extends StatefulWidget {
 
 class _SearchScreenState extends State<SearchScreen> {
   late final MachiscoreRepository _repository = widget.repository ?? MachiscoreRepository();
+  late final HomeTownStore _homeTownStore =
+      widget.homeTownStore ?? SharedPreferencesHomeTownStore();
+
+  late final CurrentLocationFinder _locationFinder =
+      widget.locationFinder ?? const CurrentLocationFinder();
+
+  /// 登録したマイタウン。未登録なら null。
+  Municipality? _homeTown;
+
+  /// 現在地を調べている最中か。
+  bool _locating = false;
   final _controller = TextEditingController();
   bool _loading = true;
   Object? _loadError;
@@ -47,8 +72,16 @@ class _SearchScreenState extends State<SearchScreen> {
     });
     try {
       await _repository.load();
+      final homeCode = await _homeTownStore.load();
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _homeTown = homeCode == null
+            ? null
+            : _repository.municipalities
+                .where((m) => m.code == homeCode)
+                .firstOrNull;
+      });
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -77,6 +110,80 @@ class _SearchScreenState extends State<SearchScreen> {
     });
   }
 
+  void _openResult(Municipality municipality) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ResultScreen(
+          municipality: municipality,
+          categories: _repository.categories,
+          isSelectedForCompare: _selected.any((m) => m.code == municipality.code),
+          // 結果を見た流れでそのまま比較に積めるようにする
+          onCompare: (target) {
+            _toggleSelection(target);
+            Navigator.of(context).pop();
+          },
+          similar: _repository.similarTo(municipality),
+          // 似ている町から次の町へ。積み重ねて回遊できる
+          onOpenMunicipality: _openResult,
+          isHomeTown: _homeTown?.code == municipality.code,
+          onToggleHomeTown: _toggleHomeTown,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleHomeTown(Municipality municipality) async {
+    final isHome = _homeTown?.code == municipality.code;
+    if (isHome) {
+      await _homeTownStore.clear();
+    } else {
+      await _homeTownStore.save(municipality.code);
+    }
+    if (!mounted) return;
+    setState(() => _homeTown = isHome ? null : municipality);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(isHome ? 'マイタウンを解除しました' : '${municipality.name}をマイタウンにしました'),
+      ),
+    );
+  }
+
+  Future<void> _useCurrentLocation() async {
+    setState(() => _locating = true);
+    final result = await _locationFinder.find(_repository.municipalities);
+    if (!mounted) return;
+    setState(() => _locating = false);
+
+    switch (result) {
+      case LocationFound(:final municipality):
+        _openResult(municipality);
+      case LocationError(:final failure):
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_locationMessage(failure))),
+        );
+    }
+  }
+
+  String _locationMessage(LocationFailure failure) => switch (failure) {
+        LocationFailure.serviceDisabled => '位置情報サービスがオフになっています',
+        LocationFailure.permissionDenied => '位置情報の利用が許可されていません',
+        LocationFailure.permissionDeniedForever =>
+          '設定アプリから位置情報の利用を許可してください',
+        LocationFailure.notFound => '現在地の市区町村を特定できませんでした',
+        LocationFailure.failed => '現在地を取得できませんでした',
+      };
+
+  void _openRanking() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => RankingScreen(
+          repository: _repository,
+          onOpenMunicipality: _openResult,
+        ),
+      ),
+    );
+  }
+
   void _openCompare() {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -94,6 +201,11 @@ class _SearchScreenState extends State<SearchScreen> {
       appBar: AppBar(
         title: const MachiscoreLogotype(),
         actions: [
+          IconButton(
+            onPressed: _openRanking,
+            tooltip: '全国ランキング',
+            icon: const Icon(Icons.leaderboard_outlined),
+          ),
           if (_selected.isNotEmpty)
             TextButton(
               onPressed: () => setState(_selected.clear),
@@ -129,8 +241,8 @@ class _SearchScreenState extends State<SearchScreen> {
             onChanged: _onQueryChanged,
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
-              labelText: '町の名前で検索',
-              hintText: '例: 渋谷区、札幌市中央区',
+              labelText: '町の名前で検索（かな・ローマ字可）',
+              hintText: '渋谷区 / しぶや / shibuya',
               prefixIcon: const Icon(Icons.search),
               border: const OutlineInputBorder(),
               suffixIcon: _controller.text.isEmpty
@@ -145,7 +257,22 @@ class _SearchScreenState extends State<SearchScreen> {
                     ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _locating ? null : _useCurrentLocation,
+              icon: _locating
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.my_location, size: 18),
+              label: Text(_locating ? '現在地を調べています' : '現在地の町を見る'),
+            ),
+          ),
+          const SizedBox(height: 4),
           Expanded(child: _buildResults()),
         ],
       ),
@@ -154,7 +281,12 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildResults() {
     if (_controller.text.trim().isEmpty) {
-      return _EmptyState(categories: _repository.categories);
+      return _EmptyState(
+        categories: _repository.categories,
+        homeTown: _homeTown,
+        onOpenHomeTown: _openResult,
+        sourceNote: _repository.sourceNote,
+      );
     }
     if (_results.isEmpty) {
       return const Center(child: Text('該当する市区町村が見つかりません'));
@@ -217,16 +349,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     const Icon(Icons.chevron_right),
                   ],
                 ),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => ResultScreen(
-                        municipality: municipality,
-                        categories: _repository.categories,
-                      ),
-                    ),
-                  );
-                },
+                onTap: () => _openResult(municipality),
               );
             },
           ),
@@ -264,7 +387,19 @@ class _LoadErrorView extends StatelessWidget {
 class _EmptyState extends StatelessWidget {
   final List<CategoryInfo> categories;
 
-  const _EmptyState({required this.categories});
+  /// 登録済みのマイタウン。あれば一番上に出す。
+  final Municipality? homeTown;
+  final ValueChanged<Municipality> onOpenHomeTown;
+
+  /// 出典表記。データ側が持つ文言をそのまま出す。
+  final String sourceNote;
+
+  const _EmptyState({
+    required this.categories,
+    required this.homeTown,
+    required this.onOpenHomeTown,
+    required this.sourceNote,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -275,6 +410,10 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (homeTown != null) ...[
+              _HomeTownCard(municipality: homeTown!, onTap: onOpenHomeTown),
+              const SizedBox(height: 28),
+            ],
             // ヘッダーにマークがあるので、ここは文字だけで見出しを立てる
             Text(
               '町の実力を、数字で。',
@@ -294,7 +433,7 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 24),
             Text(
-              '見られるジャンル',
+              '検索するとこの5つに点数がつきます',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: context.palette.textMuted,
               ),
@@ -317,9 +456,12 @@ class _EmptyState extends StatelessWidget {
                               style: Theme.of(context).textTheme.bodyLarge,
                             ),
                           ),
-                          Text(
-                            '— 点',
-                            style: TextStyle(color: context.palette.textMuted, fontSize: 13),
+                          // 「—点」だと「データなし」に読めるので、
+                          // 検索後にここが埋まることが分かる表現にする
+                          Icon(
+                            Icons.more_horiz,
+                            size: 18,
+                            color: context.palette.textMuted,
                           ),
                         ],
                       ),
@@ -330,12 +472,108 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 20),
             Text(
-              '出典: 総務省統計局 経済センサス・国勢調査',
+              '出典: 総務省統計局\n$sourceNote',
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: context.palette.textMuted),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+
+/// 登録したマイタウンを検索前に見せるカード。
+/// 毎回検索し直さずに済み、アプリを再び開く理由にもなる。
+class _HomeTownCard extends StatelessWidget {
+  final Municipality municipality;
+  final ValueChanged<Municipality> onTap;
+
+  const _HomeTownCard({required this.municipality, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final score = municipality.totalScore;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => onTap(municipality),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.star, size: 16, color: context.palette.brand),
+                  const SizedBox(width: 4),
+                  Text(
+                    'マイタウン',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.palette.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 12,
+                children: [
+                  Text(
+                    municipality.name,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (score != null)
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: '$score',
+                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          TextSpan(
+                            text: '点',
+                            style: TextStyle(
+                              color: context.palette.textSecondary,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+              if (score != null) ...[
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: score / 100,
+                    minHeight: 6,
+                    backgroundColor: context.palette.track,
+                    valueColor: AlwaysStoppedAnimation(context.palette.scoreColor(score)),
+                  ),
+                ),
+              ],
+              if (municipality.prefectureRank != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '${municipality.prefecture}で${municipality.prefectureRank}位',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.palette.textSecondary,
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

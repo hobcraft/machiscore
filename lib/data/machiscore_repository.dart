@@ -4,13 +4,23 @@ import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../models/municipality.dart';
+import '../utils/search_text.dart';
 
 /// 同梱JSONのパース結果。
 class MachiscoreData {
   final List<CategoryInfo> categories;
   final List<Municipality> municipalities;
 
-  MachiscoreData({required this.categories, required this.municipalities});
+  /// 出典表記。バッチ側が実際に使った統計を書き出すので、
+  /// アプリに固定文言を持たせず必ずこちらを表示する
+  /// （二重管理にするとデータを足したときに表示だけ古くなる）。
+  final String sourceNote;
+
+  MachiscoreData({
+    required this.categories,
+    required this.municipalities,
+    required this.sourceNote,
+  });
 }
 
 /// 1.5MB のJSONをデコードしてモデルに変換する。
@@ -27,7 +37,11 @@ MachiscoreData _parseMachiscoreJson(String jsonString) {
       .map((entry) => Municipality.fromJson(entry.key, entry.value as Map<String, dynamic>))
       .toList();
 
-  return MachiscoreData(categories: categories, municipalities: municipalities);
+  return MachiscoreData(
+    categories: categories,
+    municipalities: municipalities,
+    sourceNote: data['source_note'] as String? ?? '',
+  );
 }
 
 typedef JsonParser = Future<MachiscoreData> Function(String jsonString);
@@ -60,24 +74,77 @@ class MachiscoreRepository {
 
   List<Municipality> get municipalities => _data?.municipalities ?? const [];
 
-  /// 市区町村名・都道府県名の部分一致で検索する。
-  /// 「渋谷」でも「東京都渋谷区」でも引けるよう、都道府県付きの名前も対象にする。
+  String get sourceNote => _data?.sourceNote ?? '';
+
+  /// スコアの並びが近い市区町村を返す。
+  ///
+  /// 5カテゴリのスコアを5次元の点とみなし、ユークリッド距離が小さい順に選ぶ。
+  /// 総合点ではなく「どのジャンルが強い町か」という形で似た町が出るので、
+  /// 政令市の中心区には他の政令市の中心区が、といった納得感のある結果になる。
+  ///
+  /// 事前計算せず都度求めているのは、1863件×5次元なら十分速く、
+  /// 同梱JSONを膨らませずに済むため。
+  List<Municipality> similarTo(Municipality target, {int limit = 5}) {
+    if (!target.ranked) return const [];
+    final categoryCodes = categories.map((c) => c.code).toList();
+    final targetScores = _scoreVector(target, categoryCodes);
+    if (targetScores == null) return const [];
+
+    final scored = <(double, Municipality)>[];
+    for (final municipality in municipalities) {
+      if (municipality.code == target.code || !municipality.ranked) continue;
+      final scores = _scoreVector(municipality, categoryCodes);
+      if (scores == null) continue;
+      var sum = 0.0;
+      for (var i = 0; i < scores.length; i++) {
+        final diff = scores[i] - targetScores[i];
+        sum += diff * diff;
+      }
+      scored.add((sum, municipality));
+    }
+    scored.sort((a, b) => a.$1.compareTo(b.$1));
+    return [for (final entry in scored.take(limit)) entry.$2];
+  }
+
+  static List<int>? _scoreVector(Municipality municipality, List<String> categoryCodes) {
+    final scores = <int>[];
+    for (final code in categoryCodes) {
+      final score = municipality.categories[code]?.score;
+      if (score == null) return null;
+      scores.add(score);
+    }
+    return scores;
+  }
+
+  /// 市区町村を検索する。
+  ///
+  /// 漢字だけでなく、ひらがな・カタカナ・ローマ字でも引ける
+  /// （「渋谷」「しぶや」「シブヤ」「shibuya」がいずれも渋谷区に当たる）。
+  /// 「東京都渋谷区」のように都道府県を付けた形にも対応する。
   /// 前方一致を先に、それ以外を後ろに並べる。件数は打ち切らない。
   List<Municipality> search(String query) {
-    final trimmed = query.trim();
-    if (trimmed.isEmpty) return const [];
+    final normalized = normalizeForSearch(query);
+    if (normalized.isEmpty) return const [];
 
     final prefixMatches = <Municipality>[];
     final otherMatches = <Municipality>[];
     for (final municipality in _data?.municipalities ?? const <Municipality>[]) {
-      final name = municipality.name;
-      final fullName = municipality.fullName;
-      if (name.startsWith(trimmed) || fullName.startsWith(trimmed)) {
+      var matchedPrefix = false;
+      var matched = false;
+      for (final key in municipality.searchKeys) {
+        if (key.startsWith(normalized)) {
+          matchedPrefix = true;
+          break;
+        }
+        if (!matched && key.contains(normalized)) matched = true;
+      }
+      if (matchedPrefix) {
         prefixMatches.add(municipality);
-      } else if (name.contains(trimmed) || fullName.contains(trimmed)) {
+      } else if (matched) {
         otherMatches.add(municipality);
       }
     }
     return [...prefixMatches, ...otherMatches];
   }
+
 }
