@@ -51,25 +51,40 @@ DENSITY_DECIMALS = 2
 RANKING_MIN_DAY_POPULATION = 1000
 
 
-def rank_by_density(rows):
-    """(area_code, count, density) のリストに競争順位(1,2,2,4形式)を付ける。
+def competition_rank(pairs):
+    """(キー, 値) のリストに競争順位(1,2,2,4形式)を付ける。値が大きいほど上位。
 
-    同じ密度なら同順位にする。順位の判定には表示上の丸め後の値を使うので、
-    アプリ上で同じ数値に見える市区町村は必ず同じ順位になる。
+    同じ値なら同順位にする。全国順位も県内順位もこの関数を通すので、
+    同値の扱いが場所によってブレることがない。
+    戻り値は キー -> (順位, 母数)。
     """
-    rows = sorted(rows, key=lambda r: r[2], reverse=True)
-    total = len(rows)
+    ordered = sorted(pairs, key=lambda p: p[1], reverse=True)
+    total = len(ordered)
 
     result = {}
-    previous_density = None
+    previous_value = None
     previous_rank = 0
-    for index, (area_code, count, density) in enumerate(rows, start=1):
-        if density == previous_density:
+    for index, (key, value) in enumerate(ordered, start=1):
+        if value == previous_value:
             rank = previous_rank  # 同値なので直前と同順位
         else:
-            rank = index  # competition ranking: 同順位が続いた分だけ番号が飛ぶ
-            previous_density = density
+            rank = index  # 同順位が続いた分だけ番号が飛ぶ
+            previous_value = value
             previous_rank = rank
+        result[key] = (rank, total)
+    return result
+
+
+def rank_by_density(rows):
+    """(area_code, count, density) のリストに全国順位とスコアを付ける。
+
+    順位の判定には表示上の丸め後の密度を使うので、
+    アプリ上で同じ数値に見える市区町村は必ず同じ順位になる。
+    """
+    ranks = competition_rank([(code, density) for code, _count, density in rows])
+    result = {}
+    for area_code, count, density in rows:
+        rank, total = ranks[area_code]
         result[area_code] = {
             "count": count,
             "density_per_10000": density,
@@ -78,6 +93,78 @@ def rank_by_density(rows):
             "score": percentile_score(rank, total),
         }
     return result
+
+
+# 昼間人口の規模帯。渋谷区と小さな村を同じ土俵で比べても意味が薄いので、
+# 近い規模の町の中での立ち位置も出す。どの帯も200件以上あり順位として成立する。
+SIZE_BANDS = [
+    (0, 10_000, "昼間人口1万人未満の町"),
+    (10_000, 50_000, "昼間人口1〜5万人の町"),
+    (50_000, 150_000, "昼間人口5〜15万人の町"),
+    (150_000, None, "昼間人口15万人以上の町"),
+]
+
+
+def size_band_label(day_population):
+    for low, high, label in SIZE_BANDS:
+        if day_population >= low and (high is None or day_population < high):
+            return label
+    return SIZE_BANDS[-1][2]
+
+
+def add_size_band_ranks(municipalities):
+    """同じくらいの規模の町の中での総合順位を足す。"""
+    by_band = {}
+    for code, entry in municipalities.items():
+        if entry["ranked"]:
+            by_band.setdefault(entry["size_band"], []).append(code)
+
+    for codes in by_band.values():
+        ranks = competition_rank(
+            [(code, municipalities[code]["total_score"]) for code in codes]
+        )
+        for code in codes:
+            rank, total = ranks[code]
+            municipalities[code]["size_band_rank"] = rank
+            municipalities[code]["size_band_total"] = total
+
+
+def add_prefecture_ranks(municipalities):
+    """県内での順位を各市区町村に足す。
+
+    「全国44位」は実感しにくいが「北海道で3位」なら自分ごとになる。
+    全国順位と同じ competition_rank を通すので同値の扱いも揃う。
+    ランキング対象外の自治体は母集団に入れない。
+    """
+    by_prefecture = {}
+    for code, entry in municipalities.items():
+        if entry["ranked"]:
+            by_prefecture.setdefault(entry["prefecture"], []).append(code)
+
+    for codes in by_prefecture.values():
+        # 総合スコアの県内順位
+        ranks = competition_rank(
+            [(code, municipalities[code]["total_score"]) for code in codes]
+        )
+        for code in codes:
+            rank, total = ranks[code]
+            municipalities[code]["prefecture_rank"] = rank
+            municipalities[code]["prefecture_total"] = total
+
+        # カテゴリごとの県内順位。密度で並べる（スコアは丸めが粗く同値が増えるため）
+        for cat_code in CATEGORY_NAMES:
+            targets = [c for c in codes if cat_code in municipalities[c]["categories"]]
+            cat_ranks = competition_rank(
+                [
+                    (c, municipalities[c]["categories"][cat_code]["density_per_10000"])
+                    for c in targets
+                ]
+            )
+            for code in targets:
+                rank, total = cat_ranks[code]
+                entry = municipalities[code]["categories"][cat_code]
+                entry["prefecture_rank"] = rank
+                entry["prefecture_total"] = total
 
 
 def change_rate(count_2016, count_2021):
@@ -116,6 +203,10 @@ def main():
     establishments = json.loads((DATA_DIR / "establishments_2021.json").read_text(encoding="utf-8"))
     population = json.loads((DATA_DIR / "population_2020.json").read_text(encoding="utf-8"))
     prefectures = json.loads((DATA_DIR / "prefectures.json").read_text(encoding="utf-8"))
+    # かな・ローマ字検索用の読み。fetch_readings.py で総務省のコード表から作る。
+    readings = json.loads((DATA_DIR / "readings.json").read_text(encoding="utf-8"))
+    # 人口増減率・面積・人口密度・高齢化率。町の性格を補う文脈として添える。
+    profiles = json.loads((DATA_DIR / "town_profile.json").read_text(encoding="utf-8"))
 
     # 5年前(2016年)の事業所数。定義を揃えるため両年とも民営事業所を使う。
     past = json.loads((DATA_DIR / "establishments_2016.json").read_text(encoding="utf-8"))
@@ -191,9 +282,12 @@ def main():
 
         night_population = pop_entry["night_population"]
         day_population = pop_entry["day_population"]
+        reading = readings.get(area_code, {})
         municipalities[area_code] = {
             "name": area_names[area_code],
             "prefecture": prefectures[area_code[:2]],
+            "kana": reading.get("hiragana"),
+            "romaji": reading.get("romaji"),
             "day_population": day_population,
             "night_population": night_population,
             # 昼夜間人口比率。100を超えれば昼に人が流入する町。
@@ -201,6 +295,12 @@ def main():
                 round(day_population / night_population * 100, 1) if night_population else None
             ),
             "ranked": is_ranked,
+            "size_band": size_band_label(day_population),
+            # 事業所の密度だけでは分からない町の背景。欠損はそのまま null で持つ。
+            "population_change_rate": profiles.get(area_code, {}).get("population_change_rate"),
+            "area_km2": profiles.get(area_code, {}).get("area_km2"),
+            "population_density": profiles.get(area_code, {}).get("population_density"),
+            "elderly_rate": profiles.get(area_code, {}).get("elderly_rate"),
             # 総合マチスコア。各カテゴリのスコアの平均。
             # データが無いカテゴリは0点扱いにせず平均から除く（0点にすると
             # 「秘匿されている」だけの町を不当に低く見せてしまうため）。
@@ -209,10 +309,16 @@ def main():
             "categories": cat_result,
         }
 
+    add_prefecture_ranks(municipalities)
+    add_size_band_ranks(municipalities)
+
     output = {
         "categories": [{"code": c, "name": n} for c, n in CATEGORY_NAMES.items()],
+        # 画面の出典表記に使う。データを足したらここも必ず更新すること
+        # （実際に使っている統計と食い違うと、利用者に誤った出典を示すことになる）。
         "source_note": "民営事業所数=2021年・2016年経済センサス活動調査、"
-        "昼間人口=2020年国勢調査（従業地・通学地集計）",
+        "昼間人口・高齢化率=2020年国勢調査、"
+        "人口増減率・面積・人口密度=2025年国勢調査",
         "density_basis": "昼間人口1万人あたりの事業所数",
         "ranking_min_day_population": RANKING_MIN_DAY_POPULATION,
         "municipalities": municipalities,
@@ -225,6 +331,14 @@ def main():
     # アプリ側が古いデータのまま取り残されるため、ここで必ず同期する。
     ASSET_PATH.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(out_path, ASSET_PATH)
+
+    # 読みが欠けるとその町だけ かな検索できなくなる。黙って通さず件数を確かめる。
+    missing_reading = [v["name"] for v in municipalities.values() if not v["kana"]]
+    if missing_reading:
+        raise RuntimeError(
+            f"読み仮名が無い市区町村が{len(missing_reading)}件あります: {missing_reading[:10]}。"
+            "fetch_readings.py の MANUAL_READINGS に追加してください。"
+        )
 
     print(f"人口データが無く除外した地域: {len(dropped_no_population)}件 {dropped_no_population}")
     print(f"最終的な市区町村数: {len(municipalities)}")
