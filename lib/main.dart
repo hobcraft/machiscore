@@ -31,6 +31,10 @@ class MachiscoreApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'マチスコア',
+      // シミュレータはリリースビルドを動かせないので、審査用の
+      // スクリーンショットもデバッグビルドから撮ることになる。
+      // 右上の赤い帯が写り込むため消しておく。
+      debugShowCheckedModeBanner: false,
       // 端末のダークモード設定に追従する
       theme: buildAppTheme(Brightness.light),
       darkTheme: buildAppTheme(Brightness.dark),
