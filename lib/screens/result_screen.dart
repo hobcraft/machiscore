@@ -2,31 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../models/municipality.dart';
 import '../theme/app_theme.dart';
+import '../utils/map_link.dart';
 import '../utils/number_format.dart';
 import '../utils/share_score.dart';
+import '../utils/town_profile_text.dart';
 import '../utils/town_summary.dart';
+import '../widgets/score_bar.dart';
 import '../widgets/score_radar_chart.dart';
-
-/// 点数の高さを色の濃さで示すバー。数値の大小を色でも伝える。
-class _ScoreBar extends StatelessWidget {
-  final int score;
-  final double height;
-
-  const _ScoreBar({required this.score, this.height = 6});
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(4),
-      child: LinearProgressIndicator(
-        value: score / 100,
-        minHeight: height,
-        backgroundColor: context.palette.track,
-        valueColor: AlwaysStoppedAnimation(context.palette.scoreColor(score)),
-      ),
-    );
-  }
-}
+import '../widgets/town_map_preview.dart';
 
 class ResultScreen extends StatelessWidget {
   final Municipality municipality;
@@ -51,6 +34,9 @@ class ResultScreen extends StatelessWidget {
   /// すでに比較対象に入っているか。
   final bool isSelectedForCompare;
 
+  /// 地図アプリへの受け渡し。テストでは実装を差し替える。
+  final MapLink mapLink;
+
   const ResultScreen({
     super.key,
     required this.municipality,
@@ -61,6 +47,7 @@ class ResultScreen extends StatelessWidget {
     this.onOpenMunicipality,
     this.onToggleHomeTown,
     this.isHomeTown = false,
+    this.mapLink = const MapLink(),
   });
 
   @override
@@ -91,13 +78,15 @@ class ResultScreen extends StatelessWidget {
             ),
           if (onCompare != null)
             // 結果を見てから比較したくなる動線。以前は検索一覧からしか選べなかった。
-            TextButton.icon(
+            // 文字ボタンだと横幅を食い、「常陸大宮市」のような長い名前が
+            // タイトルで「常陸大…」まで潰れるため、他と揃えてアイコンにする。
+            IconButton(
               onPressed: () => onCompare(municipality),
+              tooltip: isSelectedForCompare ? 'くらべる対象から外す' : 'くらべる対象に追加',
               icon: Icon(
                 isSelectedForCompare ? Icons.check_circle : Icons.add_circle_outline,
-                size: 20,
+                color: isSelectedForCompare ? context.palette.brand : null,
               ),
-              label: Text(isSelectedForCompare ? '追加済み' : 'くらべる'),
             ),
         ],
       ),
@@ -121,6 +110,13 @@ class ResultScreen extends StatelessWidget {
               category: category,
               rank: municipality.categories[category.code],
             ),
+          if (TownProfileText.describe(municipality) case final paragraphs
+              when paragraphs.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            _TownIntroduction(paragraphs: paragraphs),
+          ],
+          const SizedBox(height: 12),
+          _MapButton(municipality: municipality, mapLink: mapLink),
           if (similar.isNotEmpty && onOpenMunicipality != null) ...[
             const SizedBox(height: 12),
             _SimilarSection(
@@ -136,6 +132,53 @@ class ResultScreen extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// 「この町はどこにあるのか」に答える節。
+///
+/// 地図をその場に出しつつ、タップで地図アプリに渡して深掘りできるようにする。
+/// プレビューは [TownMapPreview]、受け渡しは [MapLink] を見ること。
+class _MapButton extends StatelessWidget {
+  final Municipality municipality;
+  final MapLink mapLink;
+
+  const _MapButton({required this.municipality, required this.mapLink});
+
+  Future<void> _open(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final opened = await mapLink.open(municipality);
+    if (!opened) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('地図アプリを開けませんでした')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('この町の位置', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        TownMapPreview(
+          municipality: municipality,
+          onTap: () => _open(context),
+        ),
+        const SizedBox(height: 6),
+        // プレビューはタップできるが、地図に見えて押せないと思われやすい。
+        // 何が起きるかを文字でも置いておく。
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: () => _open(context),
+            icon: const Icon(Icons.open_in_new, size: 18),
+            label: const Text('地図アプリで開く'),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -197,7 +240,7 @@ class _ScoreHeader extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          _ScoreBar(score: score, height: 8),
+          ScoreBar(score: score, height: 8),
           if (municipality.prefectureRank != null) ...[
             const SizedBox(height: 6),
             Text(
@@ -344,6 +387,8 @@ class _ChangeChip extends StatelessWidget {
 
     // Row のままだと大きな文字設定で横にはみ出すため、
     // 折り返せる Wrap にして「(2016年 …)」を次行に送れるようにする。
+    // ただし Wrap は要素の途中で折れないので、アイコンと並ぶ文字自体も
+    // Flexible で折り返せるようにしておかないと、文字3倍でここがはみ出す。
     return Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
       spacing: 6,
@@ -362,11 +407,13 @@ class _ChangeChip extends StatelessWidget {
               color: color,
             ),
             const SizedBox(width: 4),
-            Text(
-              flat ? '5年前と横ばい' : '5年前より $sign${changeRate.toStringAsFixed(1)}%',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: color, fontWeight: FontWeight.bold),
+            Flexible(
+              child: Text(
+                flat ? '5年前と横ばい' : '5年前より $sign${changeRate.toStringAsFixed(1)}%',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: color, fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         ),
@@ -452,7 +499,7 @@ class _CategoryBody extends StatelessWidget {
         ),
         if (score != null) ...[
           const SizedBox(height: 8),
-          _ScoreBar(score: score),
+          ScoreBar(score: score),
         ],
         const SizedBox(height: 8),
         Text(
@@ -523,6 +570,45 @@ class _SimilarSection extends StatelessWidget {
                 ),
               ],
             ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+
+/// 統計から組み立てた町の紹介。
+/// 外部の記事を引用せず手元の数字だけで書くので、
+/// 画面に並ぶ数値と食い違うことがない。
+class _TownIntroduction extends StatelessWidget {
+  final List<String> paragraphs;
+
+  const _TownIntroduction({required this.paragraphs});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('この町について', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final (index, paragraph) in paragraphs.indexed) ...[
+                  if (index > 0) const SizedBox(height: 10),
+                  Text(
+                    paragraph,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.7),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ],

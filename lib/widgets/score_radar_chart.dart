@@ -35,7 +35,18 @@ class ScoreRadarChart extends StatelessWidget {
     // ラベルの分だけ外側に余白を取る
     final canvasSize = showLabels ? size * 1.5 : size;
 
-    return SizedBox(
+    // 図形だけでは読み上げられないので、内容を言葉で持たせる。
+    // ここを省くと画面読み上げの利用者にはグラフの情報が丸ごと失われる。
+    final description = [
+      for (final (index, category) in categories.indexed)
+        '${category.name}${scores[index]}点',
+    ].join('、');
+
+    return Semantics(
+      label: '5つのジャンルのスコアを表したレーダーチャート。$description',
+      // 中の図形は個別に読み上げても意味をなさないため隠す
+      excludeSemantics: true,
+      child: SizedBox(
       width: canvasSize,
       height: canvasSize,
       child: CustomPaint(
@@ -49,6 +60,7 @@ class ScoreRadarChart extends StatelessWidget {
           strokeColor: palette.brand,
           labelColor: palette.textSecondary,
         ),
+      ),
       ),
     );
   }

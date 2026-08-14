@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/municipality.dart';
 import '../theme/app_theme.dart';
 import '../utils/number_format.dart';
+import '../widgets/score_bar.dart';
 
 /// 選んだ市区町村を横に並べて比べる画面。
 class CompareScreen extends StatelessWidget {
@@ -151,15 +152,9 @@ class _CompareRow extends StatelessWidget {
                             const SizedBox(height: 4),
                             Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 12),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(3),
-                                child: LinearProgressIndicator(
-                                  value: score / 100,
-                                  minHeight: emphasize ? 6 : 4,
-                                  backgroundColor: context.palette.track,
-                                  valueColor:
-                                      AlwaysStoppedAnimation(context.palette.scoreColor(score)),
-                                ),
+                              child: ScoreBar(
+                                score: score,
+                                height: emphasize ? 6 : 4,
                               ),
                             ),
                           ],

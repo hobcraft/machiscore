@@ -85,6 +85,10 @@ class Municipality {
   /// 昼間人口が少ない自治体は事業所1件の増減で密度が乱高下するため対象外にしている。
   final bool ranked;
 
+  /// 地図プレビューの中心。大字の点をまとめた代表点なので役場とは数km離れうる。
+  final double? lat;
+  final double? lon;
+
   /// カテゴリ別スコアの平均。ランキング対象外なら null。
   final int? totalScore;
 
@@ -115,6 +119,8 @@ class Municipality {
     required this.nightPopulation,
     required this.dayNightRatio,
     required this.ranked,
+    required this.lat,
+    required this.lon,
     required this.totalScore,
     required this.prefectureRank,
     required this.prefectureTotal,
@@ -155,6 +161,8 @@ class Municipality {
       nightPopulation: json['night_population'] as int?,
       dayNightRatio: (json['day_night_ratio'] as num?)?.toDouble(),
       ranked: json['ranked'] as bool,
+      lat: (json['lat'] as num?)?.toDouble(),
+      lon: (json['lon'] as num?)?.toDouble(),
       totalScore: json['total_score'] as int?,
       prefectureRank: json['prefecture_rank'] as int?,
       prefectureTotal: json['prefecture_total'] as int?,

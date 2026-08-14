@@ -16,10 +16,14 @@ class MachiscoreData {
   /// （二重管理にするとデータを足したときに表示だけ古くなる）。
   final String sourceNote;
 
+  /// 座標だけは政府統計ではないので、出典を分けて持つ。
+  final String coordinateNote;
+
   MachiscoreData({
     required this.categories,
     required this.municipalities,
     required this.sourceNote,
+    required this.coordinateNote,
   });
 }
 
@@ -41,6 +45,7 @@ MachiscoreData _parseMachiscoreJson(String jsonString) {
     categories: categories,
     municipalities: municipalities,
     sourceNote: data['source_note'] as String? ?? '',
+    coordinateNote: data['coordinate_note'] as String? ?? '',
   );
 }
 
@@ -75,6 +80,7 @@ class MachiscoreRepository {
   List<Municipality> get municipalities => _data?.municipalities ?? const [];
 
   String get sourceNote => _data?.sourceNote ?? '';
+  String get coordinateNote => _data?.coordinateNote ?? '';
 
   /// スコアの並びが近い市区町村を返す。
   ///

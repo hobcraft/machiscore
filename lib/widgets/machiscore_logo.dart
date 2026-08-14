@@ -17,7 +17,9 @@ class MachiscoreMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    return SizedBox(
+    // 隣の「マチスコア」の文字が名前を読み上げるので、マークは装飾扱いにする
+    return ExcludeSemantics(
+      child: SizedBox(
       height: height,
       width: height * _MarkPainter.aspectRatio,
       child: CustomPaint(
@@ -25,6 +27,7 @@ class MachiscoreMark extends StatelessWidget {
           pin: palette.brand,
           knockout: palette.pageBackground,
         ),
+      ),
       ),
     );
   }

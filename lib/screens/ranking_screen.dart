@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/machiscore_repository.dart';
 import '../models/municipality.dart';
 import '../theme/app_theme.dart';
+import '../widgets/score_bar.dart';
 
 /// 全国ランキングを眺める画面。
 ///
@@ -191,15 +192,7 @@ class _RankingRow extends StatelessWidget {
           if (score != null) ...[
             SizedBox(
               width: 36,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(3),
-                child: LinearProgressIndicator(
-                  value: score / 100,
-                  minHeight: 5,
-                  backgroundColor: palette.track,
-                  valueColor: AlwaysStoppedAnimation(palette.scoreColor(score)),
-                ),
-              ),
+              child: ScoreBar(score: score, height: 5),
             ),
             const SizedBox(width: 10),
             Text(

@@ -6,6 +6,8 @@ import '../data/machiscore_repository.dart';
 import '../models/municipality.dart';
 import '../theme/app_theme.dart';
 import '../widgets/machiscore_logo.dart';
+import '../widgets/score_bar.dart';
+import 'about_score_screen.dart';
 import 'compare_screen.dart';
 import 'ranking_screen.dart';
 import 'result_screen.dart';
@@ -202,6 +204,15 @@ class _SearchScreenState extends State<SearchScreen> {
         title: const MachiscoreLogotype(),
         actions: [
           IconButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => AboutScoreScreen(repository: _repository),
+              ),
+            ),
+            tooltip: 'スコアの見かた',
+            icon: const Icon(Icons.help_outline),
+          ),
+          IconButton(
             onPressed: _openRanking,
             tooltip: '全国ランキング',
             icon: const Icon(Icons.leaderboard_outlined),
@@ -327,15 +338,7 @@ class _SearchScreenState extends State<SearchScreen> {
                       // 一覧の段階でも点数の高さが色でわかるよう小さなバーを添える
                       SizedBox(
                         width: 36,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(3),
-                          child: LinearProgressIndicator(
-                            value: score / 100,
-                            minHeight: 5,
-                            backgroundColor: context.palette.track,
-                            valueColor: AlwaysStoppedAnimation(context.palette.scoreColor(score)),
-                          ),
-                        ),
+                        child: ScoreBar(score: score, height: 5),
                       ),
                       const SizedBox(width: 10),
                     ],
@@ -553,15 +556,7 @@ class _HomeTownCard extends StatelessWidget {
               ),
               if (score != null) ...[
                 const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: score / 100,
-                    minHeight: 6,
-                    backgroundColor: context.palette.track,
-                    valueColor: AlwaysStoppedAnimation(context.palette.scoreColor(score)),
-                  ),
-                ),
+                ScoreBar(score: score),
               ],
               if (municipality.prefectureRank != null) ...[
                 const SizedBox(height: 6),

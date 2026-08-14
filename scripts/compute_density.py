@@ -207,6 +207,11 @@ def main():
     readings = json.loads((DATA_DIR / "readings.json").read_text(encoding="utf-8"))
     # 人口増減率・面積・人口密度・高齢化率。町の性格を補う文脈として添える。
     profiles = json.loads((DATA_DIR / "town_profile.json").read_text(encoding="utf-8"))
+    # 地図プレビューの中心。fetch_coordinates.py で大字の点からまとめた代表点。
+    coordinates = {
+        c["area_code"]: c
+        for c in json.loads((DATA_DIR / "coordinates.json").read_text(encoding="utf-8"))
+    }
 
     # 5年前(2016年)の事業所数。定義を揃えるため両年とも民営事業所を使う。
     past = json.loads((DATA_DIR / "establishments_2016.json").read_text(encoding="utf-8"))
@@ -295,6 +300,8 @@ def main():
                 round(day_population / night_population * 100, 1) if night_population else None
             ),
             "ranked": is_ranked,
+            "lat": coordinates.get(area_code, {}).get("lat"),
+            "lon": coordinates.get(area_code, {}).get("lon"),
             "size_band": size_band_label(day_population),
             # 事業所の密度だけでは分からない町の背景。欠損はそのまま null で持つ。
             "population_change_rate": profiles.get(area_code, {}).get("population_change_rate"),
@@ -319,6 +326,8 @@ def main():
         "source_note": "民営事業所数=2021年・2016年経済センサス活動調査、"
         "昼間人口・高齢化率=2020年国勢調査、"
         "人口増減率・面積・人口密度=2025年国勢調査",
+        # 座標だけは政府統計ではないので、出典を分けて持つ（画面でも別に表示する）。
+        "coordinate_note": "市区町村の代表点=Geolonia 住所データ（CC BY 4.0）",
         "density_basis": "昼間人口1万人あたりの事業所数",
         "ranking_min_day_population": RANKING_MIN_DAY_POPULATION,
         "municipalities": municipalities,
@@ -338,6 +347,14 @@ def main():
         raise RuntimeError(
             f"読み仮名が無い市区町村が{len(missing_reading)}件あります: {missing_reading[:10]}。"
             "fetch_readings.py の MANUAL_READINGS に追加してください。"
+        )
+
+    # 座標が欠けるとその町だけ地図を出せない。読み仮名と同じく黙って通さない。
+    missing_coordinate = [v["name"] for v in municipalities.values() if v["lat"] is None]
+    if missing_coordinate:
+        raise RuntimeError(
+            f"代表点が無い市区町村が{len(missing_coordinate)}件あります: {missing_coordinate[:10]}。"
+            "fetch_coordinates.py の MANUAL_COORDINATES に追加してください。"
         )
 
     print(f"人口データが無く除外した地域: {len(dropped_no_population)}件 {dropped_no_population}")

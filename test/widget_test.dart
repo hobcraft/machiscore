@@ -8,12 +8,17 @@ import 'package:machiscore/data/current_location_finder.dart';
 import 'package:machiscore/data/home_town_store.dart';
 import 'package:machiscore/data/machiscore_repository.dart';
 import 'package:machiscore/main.dart';
+import 'package:machiscore/models/municipality.dart';
+import 'package:machiscore/screens/about_score_screen.dart';
 import 'package:machiscore/screens/compare_screen.dart';
 import 'package:machiscore/screens/ranking_screen.dart';
 import 'package:machiscore/screens/result_screen.dart';
 import 'package:machiscore/widgets/score_radar_chart.dart';
+import 'package:machiscore/widgets/town_map_preview.dart';
 import 'package:machiscore/widgets/share_card.dart';
 import 'package:machiscore/theme/app_theme.dart';
+import 'package:machiscore/utils/map_link.dart';
+import 'package:machiscore/utils/town_profile_text.dart';
 import 'package:machiscore/utils/town_summary.dart';
 
 /// テスト用のリポジトリ。
@@ -317,6 +322,73 @@ void main() {
     });
   }
 
+  testWidgets('最長の町名でも文字3倍の結果画面が下まで崩れない', (tester) async {
+    // 「さいたま市大宮区を地図で見る」が最長のボタン文言になる。
+    // 既存の拡大テストは渋谷区かつ初期表示分だけなので、
+    // 名前が長い町で、画面外の要素まで送って確かめる。
+    tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+    final longest = repository.municipalities.reduce(
+      (a, b) => a.name.length >= b.name.length ? a : b,
+    );
+
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(textScaler: TextScaler.linear(3.0)),
+        child: MaterialApp(
+          theme: buildAppTheme(Brightness.light),
+          home: ResultScreen(
+            municipality: longest,
+            categories: repository.categories,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // 地図の節まで送って、そこでも崩れないことを見る
+    await tester.scrollUntilVisible(find.text('この町の位置'), 300);
+    expect(find.text('地図アプリで開く'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // ListViewは画面外を組み立てないので、最後まで送りながら例外を拾う
+    for (var i = 0; i < 12; i++) {
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: '${longest.name} の$i回送った先で崩れた');
+    }
+  });
+
+  testWidgets('文字を3倍にしてもスコアの説明画面が崩れない', (tester) async {
+    tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(textScaler: TextScaler.linear(3.0)),
+        child: MaterialApp(
+          theme: buildAppTheme(Brightness.light),
+          home: AboutScoreScreen(repository: repository),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    for (var i = 0; i < 12; i++) {
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: 'スコアの説明画面の$i回送った先で崩れた');
+    }
+  });
+
   testWidgets('ダークモードでも配色が切り替わり、崩れない', (tester) async {
     tester.view.physicalSize = const Size(390 * 3, 844 * 3);
     tester.view.devicePixelRatio = 3.0;
@@ -471,9 +543,10 @@ void main() {
     await tester.tap(find.widgetWithText(ListTile, '渋谷区').first);
     await tester.pumpAndSettle();
 
-    // 結果画面に「くらべる」の導線がある
-    expect(find.widgetWithText(TextButton, 'くらべる'), findsOneWidget);
-    await tester.tap(find.widgetWithText(TextButton, 'くらべる'));
+    // 結果画面に「くらべる」の導線がある。
+    // 文字ボタンだとタイトルを圧迫するのでアイコンにしてある。
+    expect(find.byTooltip('くらべる対象に追加'), findsOneWidget);
+    await tester.tap(find.byTooltip('くらべる対象に追加'));
     await tester.pumpAndSettle();
 
     // 検索画面に戻り、選択済みになっている
@@ -754,6 +827,64 @@ void main() {
     }
   });
 
+  group('町の紹介文', () {
+    test('ほぼ全件で生成でき、内容にばらつきがある', () async {
+      final repository = await loadRepository();
+      var empty = 0;
+      final variety = <String>{};
+      for (final municipality in repository.municipalities) {
+        final paragraphs = TownProfileText.describe(municipality);
+        if (paragraphs.isEmpty) empty++;
+        variety.addAll(paragraphs);
+      }
+      // 背景データが欠ける数件を除き生成できること
+      expect(empty, lessThan(20));
+      // 全部同じ文言になっていないこと（判定が働いている証拠）
+      expect(variety.length, greaterThan(50));
+    });
+
+    test('小さな町で昼夜間人口比率を過剰に語らない', () async {
+      // 青ヶ島村は昼間205人・夜間169人。36人差で比率121%になるが、
+      // これを「働く場としての性格が強い」と書くのは言い過ぎ。
+      final repository = await loadRepository();
+      final aogashima =
+          repository.municipalities.firstWhere((m) => m.code == '13402');
+      final text = TownProfileText.describe(aogashima).join();
+
+      expect(text, isNot(contains('働く場としての性格')));
+      expect(text, isNot(contains('通勤・通学で人が流入')));
+    });
+
+    test('大きな町では昼夜間人口比率をきちんと述べる', () async {
+      final repository = await loadRepository();
+      final chiyoda = repository.municipalities.firstWhere((m) => m.code == '13101');
+      final text = TownProfileText.describe(chiyoda).join();
+
+      expect(text, contains('働く場としての性格'));
+    });
+
+    test('人口が増えている町と減っている町を書き分ける', () async {
+      final repository = await loadRepository();
+      final growing = repository.municipalities.firstWhere((m) => m.code == '01101');
+      final shrinking = repository.municipalities.firstWhere((m) => m.code == '29441');
+
+      expect(TownProfileText.describe(growing).join(), contains('増えました'));
+      expect(TownProfileText.describe(shrinking).join(), contains('減りました'));
+    });
+  });
+
+  testWidgets('結果画面に町の紹介が出る', (tester) async {
+    await pumpLoadedApp(tester);
+    await tester.enterText(find.byType(TextField), '渋谷区');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ListTile, '渋谷区').first);
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(find.text('この町について'), 300);
+    expect(find.text('この町について'), findsOneWidget);
+    expect(find.textContaining('昼間は夜間の'), findsOneWidget);
+  });
+
   test('同じ密度なら同じ順位になっている', () async {
     // 表示上の密度が同じなのに順位が違うと、ユーザーには不整合に見える。
     // バッチ側の順位付け(competition ranking)が崩れていないことを検証する。
@@ -790,10 +921,265 @@ void main() {
 
   test('オフィス街が夜間人口ベースの過大評価から補正されている', () async {
     // 千代田区は夜間人口が少なく昼間人口が桁違いに多い。
-    // 夜間人口で割ると飲食店密度が全国1位になってしまうため昼間人口を分母にしている。
+    // 夜間人口で割ると専門料理店の密度が全国1位になってしまうため昼間人口を分母にしている。
     final repository = await loadRepository();
     final chiyoda = repository.municipalities.firstWhere((m) => m.code == '13101');
     expect(chiyoda.dayNightRatio, greaterThan(1000));
-    expect(chiyoda.categories['762']!.rank, greaterThan(100));
+    // 「スコアの見かた」画面で「400番台まで下がり」と具体的に書いている。
+    // データを作り直して順位が動いたら、画面の文言も直す必要があるのでここで留める。
+    expect(
+      chiyoda.categories['762']!.rank,
+      inInclusiveRange(400, 499),
+      reason: 'about_score_screen.dart の「400番台」という記述と食い違っている',
+    );
   });
+
+  testWidgets('スコアバーが読み上げを二重にしない 検索一覧とランキング', (tester) async {
+    await pumpLoadedApp(tester);
+    await tester.enterText(find.byType(TextField), '渋谷区');
+    await tester.pump();
+    _expectBarsHidden(tester, '検索一覧', atLeast: 1);
+
+    await tester.tap(find.byTooltip('全国ランキング'));
+    await tester.pumpAndSettle();
+    _expectBarsHidden(tester, '全国ランキング', atLeast: 1);
+  });
+
+  testWidgets('スコアバーが読み上げを二重にしない 結果画面とくらべる画面', (tester) async {
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+    final towns = [
+      repository.municipalities.firstWhere((m) => m.code == '13113'),
+      repository.municipalities.firstWhere((m) => m.code == '13101'),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.light),
+        home: ResultScreen(
+          municipality: towns.first,
+          categories: repository.categories,
+        ),
+      ),
+    );
+    await tester.pump();
+    _expectBarsHidden(tester, '結果画面', atLeast: 1);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.light),
+        home: CompareScreen(
+          municipalities: towns,
+          categories: repository.categories,
+        ),
+      ),
+    );
+    await tester.pump();
+    _expectBarsHidden(tester, 'くらべる画面', atLeast: 1);
+  });
+
+  test('全市区町村に地図の代表点がある', () async {
+    final repository = await loadRepository();
+    for (final municipality in repository.municipalities) {
+      final lat = municipality.lat;
+      final lon = municipality.lon;
+      expect(lat, isNotNull, reason: '${municipality.fullName} に緯度がない');
+      expect(lon, isNotNull, reason: '${municipality.fullName} に経度がない');
+      // 日本の国土の範囲。取り違えた座標が混ざれば地図が別の国を指す
+      expect(lat, inInclusiveRange(20.0, 46.0), reason: municipality.fullName);
+      expect(lon, inInclusiveRange(122.0, 154.0), reason: municipality.fullName);
+    }
+  });
+
+  test('代表点が県内の他の町と一致しない', () async {
+    // 集計を取り違えて全部同じ点になっても、範囲チェックだけでは気づけない。
+    final repository = await loadRepository();
+    final seen = <String>{};
+    for (final municipality in repository.municipalities) {
+      final key = '${municipality.lat},${municipality.lon}';
+      expect(seen.add(key), isTrue, reason: '${municipality.fullName} の座標が他と重複している');
+    }
+  });
+
+  test('代表点が実際の位置に近い', () async {
+    // 大字の中央値なので役場とは数km離れうるが、町を取り違えていれば桁が違う。
+    const known = {
+      '13113': ('渋谷区', 35.664, 139.698),
+      '01101': ('札幌市中央区', 43.056, 141.341),
+      '47201': ('那覇市', 26.212, 127.679),
+      '13402': ('青ヶ島村', 32.457, 139.766),
+      '13421': ('小笠原村', 27.094, 142.192),
+    };
+    final repository = await loadRepository();
+    for (final entry in known.entries) {
+      final (name, lat, lon) = entry.value;
+      final m = repository.municipalities.firstWhere((x) => x.code == entry.key);
+      // 緯度1度=約111km、経度1度=約91km（日本付近）で概算する
+      final km = math.sqrt(
+        math.pow((m.lat! - lat) * 111, 2) + math.pow((m.lon! - lon) * 91, 2),
+      );
+      expect(km, lessThan(60), reason: '$name の代表点が${km.toStringAsFixed(0)}kmずれている');
+    }
+  });
+
+  test('地図の縮尺が町の広さに追随する', () async {
+    final repository = await loadRepository();
+    final shibuya = repository.municipalities.firstWhere((m) => m.code == '13113');
+    final takayama = repository.municipalities.firstWhere((m) => m.name == '高山市');
+
+    final zoomSmall = TownMapPreview.zoomForArea(shibuya.areaKm2);
+    final zoomLarge = TownMapPreview.zoomForArea(takayama.areaKm2);
+    // 広い町ほど引いて見せる（ズーム値が小さい）
+    expect(zoomLarge, lessThan(zoomSmall));
+    // 面積が無い町でも破綻せず既定値に落ちる
+    expect(TownMapPreview.zoomForArea(null), inInclusiveRange(6.0, 13.0));
+    expect(TownMapPreview.zoomForArea(0), inInclusiveRange(6.0, 13.0));
+    for (final m in repository.municipalities) {
+      expect(TownMapPreview.zoomForArea(m.areaKm2), inInclusiveRange(6.0, 13.0),
+          reason: '${m.fullName} の縮尺が範囲外');
+    }
+  });
+
+  testWidgets('結果画面に地図のプレビューが出る', (tester) async {
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+    final shibuya = repository.municipalities.firstWhere((m) => m.code == '13113');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.light),
+        home: ResultScreen(
+          municipality: shibuya,
+          categories: repository.categories,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.scrollUntilVisible(find.text('この町の位置'), 200);
+    expect(find.byType(TownMapPreview), findsOneWidget);
+    expect(find.text('地図アプリで開く'), findsOneWidget);
+  });
+
+  testWidgets('レーダーチャートが読み上げ用の説明を持つ', (tester) async {
+    // CustomPaintは画面読み上げから中身が見えない。ここが欠けると、
+    // スコアの内訳という主要な情報が丸ごと届かなくなる。
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+    final shibuya =
+        repository.municipalities.firstWhere((m) => m.code == '13113');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.light),
+        home: Scaffold(
+          body: ScoreRadarChart(
+            municipality: shibuya,
+            categories: repository.categories,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final semantics = tester.getSemantics(find.byType(ScoreRadarChart));
+    expect(semantics.label, contains('レーダーチャート'));
+    for (final category in repository.categories) {
+      expect(
+        semantics.label,
+        contains(category.name),
+        reason: '${category.name}が読み上げ文に含まれていない',
+      );
+    }
+    expect(semantics.label, contains('点'));
+  });
+
+  testWidgets('スコアの説明画面に算出方法と出典が並ぶ', (tester) async {
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.light),
+        home: AboutScoreScreen(repository: repository),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('スコアの見かた'), findsOneWidget);
+    for (final category in repository.categories) {
+      expect(find.text(category.name), findsOneWidget);
+    }
+    // 対象外の基準は審査でも説明を求められうるので必ず載せる。
+    // ListViewは画面外を組み立てないので、確かめる前にスクロールして出す
+    await tester.scrollUntilVisible(find.textContaining('1,000人'), 200);
+    // 出典はデータ側から来るので、文言をベタ書きせず実データで確かめる
+    await tester.scrollUntilVisible(
+      find.textContaining(repository.sourceNote),
+      200,
+    );
+  });
+
+  testWidgets('結果画面から地図アプリに町の名前を渡せる', (tester) async {
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+    final fuchu = repository.municipalities.firstWhere((m) => m.code == '13206');
+    final mapLink = _RecordingMapLink();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.light),
+        home: ResultScreen(
+          municipality: fuchu,
+          categories: repository.categories,
+          mapLink: mapLink,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final button = find.text('地図アプリで開く');
+    // scrollUntilVisible はキャッシュ領域に組み立て済みなら「見つけた」と
+    // 判定するため、画面外のまま止まることがある。ensureVisible で押せる位置まで出す。
+    await tester.scrollUntilVisible(button, 200);
+    await tester.ensureVisible(button);
+    await tester.pump();
+    await tester.tap(button);
+    await tester.pump();
+
+    // 府中市は東京都と広島県にある。都道府県込みで渡さないと取り違える
+    expect(mapLink.opened?.fullName, '東京都府中市');
+  });
+}
+
+/// スコアバーが読み上げから隠されているか確かめる。
+///
+/// LinearProgressIndicator は value を渡すと「76%」という読み上げ値を自分で作る。
+/// 隣には「76点」が並んでいるので、隠さないと同じ数字が二度読まれる。
+/// 画面ごとに手で確認すると漏れるため、バーを見つけて祖先を辿る形で機械的に見る。
+void _expectBarsHidden(WidgetTester tester, String where, {required int atLeast}) {
+  final bars = find.byType(LinearProgressIndicator);
+  final found = tester.widgetList(bars).length;
+  // 0件のまま素通りすると、バーが消えた日に気づけない
+  expect(found, greaterThanOrEqualTo(atLeast), reason: '$where にスコアバーが見当たらない');
+
+  for (var i = 0; i < found; i++) {
+    expect(
+      find.ancestor(of: bars.at(i), matching: find.byType(ExcludeSemantics)),
+      findsAtLeastNWidgets(1),
+      reason: '$where の$i番目のスコアバーが読み上げに露出している。'
+          'ExcludeSemantics で隠すこと',
+    );
+  }
+}
+
+/// 地図アプリを起動せず、渡された町だけ覚えるテスト用の差し替え。
+class _RecordingMapLink implements MapLink {
+  Municipality? opened;
+
+  @override
+  Future<bool> open(Municipality municipality) async {
+    opened = municipality;
+    return true;
+  }
 }
