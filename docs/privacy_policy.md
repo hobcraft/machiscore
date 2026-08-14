@@ -1,3 +1,9 @@
+---
+layout: default
+title: プライバシーポリシー
+permalink: /privacy/
+---
+
 # マチスコア プライバシーポリシー
 
 最終更新日: 2026年8月14日

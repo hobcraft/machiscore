@@ -64,6 +64,9 @@ App Store Connect に入力する内容をまとめたもの。
 【現在地から探す】
 いま居る町のスコアをすぐに確認できます。
 
+【地図で位置を確認】
+その町がどこにあるかを地図で表示します。タップすれば地図アプリで開けます。
+
 ■ データについて
 総務省統計局の公的統計（経済センサス活動調査・国勢調査）にもとづいています。
 ・事業所数：2021年 経済センサス活動調査（民営事業所）
@@ -86,8 +89,14 @@ App Store Connect に入力する内容をまとめたもの。
 
 ## サポートURL / マーケティングURL
 
-未設定。GitHub Pages などに簡易ページを用意するか、GitHubリポジトリのURLを充てる。
-**App Store Connect ではサポートURLが必須。**
+GitHub Pages で docs/ を公開して充てる（リポジトリは public なので無償で使える）。
+公開対象を docs/ だけに絞り、このファイル（審査への連絡事項を含む）は notes/ に置いて公開しない。
+
+- サポートURL: https://hobcraft.github.io/machiscore/support/
+- マーケティングURL: https://hobcraft.github.io/machiscore/
+- プライバシーポリシー: https://hobcraft.github.io/machiscore/privacy/
+
+**リポジトリの Settings → Pages で「Deploy from a branch / main / docs」を選ぶまでは 404 になる。**
 
 ## プライバシー
 

@@ -1,0 +1,17 @@
+# GitHub Pages の設定。
+#
+# App Store の申請にはプライバシーポリシーとサポートの公開URLが要る。
+# アプリ本体はサーバーを持たないので、リポジトリから静的ページだけ出す。
+#
+# 公開対象はこの docs/ 配下のみ。申請メモや審査への連絡事項は
+# notes/ に置いて公開しないこと（この設定の外にある）。
+title: マチスコア
+description: 公的統計から全国1,896市区町村のお店の多さをスコアにするiOSアプリ
+lang: ja
+
+theme: jekyll-theme-primer
+
+# 生成物とビルド用ファイルはページにしない
+exclude:
+  - Gemfile
+  - Gemfile.lock
