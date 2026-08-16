@@ -31,8 +31,15 @@ class MapLink {
     // 端末側の事情で起動に失敗することがある。ここで例外にすると
     // ボタンを押しただけでクラッシュするので、false にして呼び出し元に返す。
     try {
-      // Googleマップアプリの独自スキーム。Info.plistに登録が必要
-      final googleMaps = Uri.parse('comgooglemaps://?q=$query');
+      // Googleマップの x-callback 版。ただの comgooglemaps:// で開くと、
+      // Googleマップ側が呼び出し元を知らないため画面左上に「◀ マチスコア」が
+      // 出ず、アプリ切り替えでしか戻れない。x-success に自分のスキームを
+      // 渡すと戻るボタンが出る。machiscore:// は Info.plist に登録してある。
+      final back = Uri.encodeComponent('machiscore://');
+      final source = Uri.encodeComponent('マチスコア');
+      final googleMaps = Uri.parse(
+        'comgooglemaps-x-callback://?q=$query&x-success=$back&x-source=$source',
+      );
       if (await canLaunchUrl(googleMaps)) {
         // 起動できてもキャンセルされても、ここで打ち切る。
         // 失敗と決めつけて標準マップを開くと、キャンセルを無視することになる。

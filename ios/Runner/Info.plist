@@ -72,7 +72,19 @@
 	<false/>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
+		<string>comgooglemaps-x-callback</string>
 		<string>comgooglemaps</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.yumasakai.machiscore</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>machiscore</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>
