@@ -15,7 +15,16 @@ class MapLink {
   const MapLink();
 
   /// Googleマップ（入っていれば）を優先し、無ければiOS標準のマップを開く。
-  /// 返り値は開けたかどうか。
+  ///
+  /// 返り値は「利用者に見せるべき失敗があったか」を表す。開けたときも、
+  /// 利用者が自分でキャンセルしたときも true を返す。
+  ///
+  /// Googleマップのような他社アプリのスキームを叩くと、iOSが
+  /// 「"マチスコア"が"Google Maps"を開こうとしています」という確認を挟む。
+  /// ここでキャンセルされた場合も起動に失敗した場合も launchUrl は同じく
+  /// false を返し、区別する手段が無い。エラー扱いにすると、
+  /// 自分でキャンセルしただけの人に「開けませんでした」と出てしまう。
+  /// 押し間違いなら本人がもう一度押せるので、黙って何もしないほうが良い。
   Future<bool> open(Municipality municipality) async {
     final query = Uri.encodeComponent(municipality.fullName);
 
@@ -25,10 +34,14 @@ class MapLink {
       // Googleマップアプリの独自スキーム。Info.plistに登録が必要
       final googleMaps = Uri.parse('comgooglemaps://?q=$query');
       if (await canLaunchUrl(googleMaps)) {
-        return await launchUrl(googleMaps);
+        // 起動できてもキャンセルされても、ここで打ち切る。
+        // 失敗と決めつけて標準マップを開くと、キャンセルを無視することになる。
+        await launchUrl(googleMaps);
+        return true;
       }
 
-      // iOSには必ず入っている標準マップ
+      // iOSには必ず入っている標準マップ。こちらは確認が挟まらないので、
+      // false が返れば本当に開けなかったと判断してよい。
       final appleMaps = Uri.parse('https://maps.apple.com/?q=$query');
       return await launchUrl(appleMaps, mode: LaunchMode.externalApplication);
     } on PlatformException {
