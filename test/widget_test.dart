@@ -13,6 +13,7 @@ import 'package:machiscore/screens/about_score_screen.dart';
 import 'package:machiscore/screens/compare_screen.dart';
 import 'package:machiscore/screens/ranking_screen.dart';
 import 'package:machiscore/screens/result_screen.dart';
+import 'package:machiscore/widgets/ad_banner.dart';
 import 'package:machiscore/widgets/score_radar_chart.dart';
 import 'package:machiscore/widgets/town_map_preview.dart';
 import 'package:machiscore/widgets/share_card.dart';
@@ -1059,6 +1060,68 @@ void main() {
     await tester.scrollUntilVisible(find.text('この町の位置'), 200);
     expect(find.byType(TownMapPreview), findsOneWidget);
     expect(find.text('地図アプリで開く'), findsOneWidget);
+  });
+
+  testWidgets('広告枠が読み上げに出ず、文字3倍でも画面を壊さない', (tester) async {
+    // 広告SDKはテストではプラットフォームチャネルが無く、寸法が取れないので
+    // 枠は畳まれる。ここで見るのは「壊さないこと」と「読み上げに出ないこと」。
+    // 実際の表示はシミュレータ実機で確認する（テストでは検証できない）。
+    tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+    final town = repository.municipalities.firstWhere((m) => m.code == '13113');
+
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(textScaler: TextScaler.linear(3.0)),
+        child: MaterialApp(
+          theme: buildAppTheme(Brightness.light),
+          home: ResultScreen(
+            municipality: town,
+            categories: repository.categories,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // 広告枠は装飾扱い。読み上げに出てはいけない
+    expect(find.byType(AdBanner), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.byType(AdBanner),
+        matching: find.byType(ExcludeSemantics),
+      ),
+      findsNothing,
+      reason: 'AdBanner は自分の中で ExcludeSemantics を持つ想定',
+    );
+
+    // ListViewは画面外を組み立てないので、送りながら例外を拾う
+    for (var i = 0; i < 12; i++) {
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: '広告枠を足した状態で$i回送った先で崩れた');
+    }
+  });
+
+  testWidgets('広告を出さない画面には広告枠が無い', (tester) async {
+    // 算出方法と出典を説明する画面。ここに広告を置くと、
+    // 出典が広告主のものに見えかねないので入れない。
+    final repository = newTestRepository();
+    await tester.runAsync(repository.load);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.light),
+        home: AboutScoreScreen(repository: repository),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(AdBanner), findsNothing);
   });
 
   testWidgets('レーダーチャートが読み上げ用の説明を持つ', (tester) async {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/machiscore_repository.dart';
 import '../models/municipality.dart';
 import '../theme/app_theme.dart';
+import '../widgets/ad_banner.dart';
 import '../widgets/score_bar.dart';
 
 /// 全国ランキングを眺める画面。
@@ -68,6 +69,9 @@ class _RankingScreenState extends State<RankingScreen> {
     final ranked = _ranked;
 
     return Scaffold(
+      // 本文の末尾ではなく画面下部に固定する。スクロール末尾に置くと
+      // 指が流れてきて誤タップになり、ポリシー違反として扱われうる。
+      bottomNavigationBar: const AdBanner(),
       appBar: AppBar(title: const Text('全国ランキング')),
       body: Column(
         children: [

@@ -5,6 +5,7 @@ import '../data/home_town_store.dart';
 import '../data/machiscore_repository.dart';
 import '../models/municipality.dart';
 import '../theme/app_theme.dart';
+import '../widgets/ad_banner.dart';
 import '../widgets/machiscore_logo.dart';
 import '../widgets/score_bar.dart';
 import 'about_score_screen.dart';
@@ -200,6 +201,9 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // 本文の末尾ではなく画面下部に固定する。スクロール末尾に置くと
+      // 指が流れてきて誤タップになり、ポリシー違反として扱われうる。
+      bottomNavigationBar: const AdBanner(),
       appBar: AppBar(
         title: const MachiscoreLogotype(),
         actions: [

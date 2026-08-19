@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import 'data/current_location_finder.dart';
 import 'data/home_town_store.dart';
@@ -7,6 +8,11 @@ import 'screens/search_screen.dart';
 import 'theme/app_theme.dart';
 
 void main() {
+  // 広告の読み込みより前に済ませておく。initialize は待たなくても
+  // 後続の読み込みは内部で待ち合わせるが、起動直後に呼んでおくと
+  // 最初のバナーが表示されるまでが短くなる。
+  WidgetsFlutterBinding.ensureInitialized();
+  MobileAds.instance.initialize();
   runApp(const MachiscoreApp());
 }
 

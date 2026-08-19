@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/municipality.dart';
 import '../theme/app_theme.dart';
 import '../utils/number_format.dart';
+import '../widgets/ad_banner.dart';
 import '../widgets/score_bar.dart';
 
 /// 選んだ市区町村を横に並べて比べる画面。
@@ -15,6 +16,9 @@ class CompareScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // 本文の末尾ではなく画面下部に固定する。スクロール末尾に置くと
+      // 指が流れてきて誤タップになり、ポリシー違反として扱われうる。
+      bottomNavigationBar: const AdBanner(),
       appBar: AppBar(title: const Text('くらべる')),
       body: ListView(
         padding: const EdgeInsets.all(16),

@@ -7,6 +7,7 @@ import '../utils/number_format.dart';
 import '../utils/share_score.dart';
 import '../utils/town_profile_text.dart';
 import '../utils/town_summary.dart';
+import '../widgets/ad_banner.dart';
 import '../widgets/score_bar.dart';
 import '../widgets/score_radar_chart.dart';
 import '../widgets/town_map_preview.dart';
@@ -55,6 +56,9 @@ class ResultScreen extends StatelessWidget {
     final onCompare = this.onCompare;
     final onToggleHomeTown = this.onToggleHomeTown;
     return Scaffold(
+      // 本文の末尾ではなく画面下部に固定する。スクロール末尾に置くと
+      // 指が流れてきて誤タップになり、ポリシー違反として扱われうる。
+      bottomNavigationBar: const AdBanner(),
       appBar: AppBar(
         title: Text(municipality.name),
         actions: [
