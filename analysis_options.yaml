@@ -9,6 +9,13 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # ビルド生成物。Swift Package Manager が取得した依存パッケージの
+    # ソースとテストがここに展開されるため、除外しないと他人のコードの
+    # 警告が数百件出て、自前のコードの問題が埋もれる。
+    - build/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`
