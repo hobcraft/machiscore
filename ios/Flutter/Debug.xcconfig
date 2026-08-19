@@ -1,2 +1,8 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
 #include "Generated.xcconfig"
+
+// AdMob のアプリID。Info.plist の GADApplicationIdentifier から参照する。
+// AdMob のアプリ審査が完了するまでは Debug/Release ともテスト用のままにする。
+// 解禁時は Release だけ ca-app-pub-3660525702986796~8286561381 に変え、
+// あわせて lib/ads/ad_config.dart の useProductionAds も切り替えること。
+ADMOB_APP_ID = ca-app-pub-3940256099942544~1458002511
